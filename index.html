@@ -19,6 +19,12 @@
                 --muted: #737373;
                 --line: #111111;
                 --hairline: #cccccc;
+                --mono: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
+                /* the QR is rendered at 480 px and only ever scaled down: the
+                   subtraction is the rest of the result column (plate padding,
+                   caption row, meta table, panel padding) so a short screen
+                   shrinks the code instead of pushing the card off-screen */
+                --qr: min(480px, calc(100vh - 190px));
                 color-scheme: light;
             }
 
@@ -35,7 +41,7 @@
             body {
                 margin: 0;
                 display: flex;
-                padding: 16px;
+                padding: 12px;
                 background: var(--bg);
                 color: var(--fg);
                 font-family:
@@ -45,15 +51,13 @@
                     BlinkMacSystemFont,
                     "Segoe UI",
                     sans-serif;
-                font-size: 14px;
-                line-height: 1.3;
+                font-size: 13px;
+                line-height: 1.25;
                 -webkit-font-smoothing: antialiased;
             }
 
-            /* auto margins center the card but still let it scroll if the
-               viewport is shorter than the result state.
-               fit-content means the card is only as wide as the form until the
-               result panel appears, then it grows rightward around the QR. */
+            /* auto margins centre the card and still let it scroll on a screen
+               shorter than the card; align-items would clip the top instead */
             .card {
                 display: flex;
                 width: fit-content;
@@ -64,74 +68,110 @@
             }
 
             .panel {
-                padding: 18px 22px;
+                padding: 14px 16px;
             }
 
+            /* only as wide as the form until the result panel appears; centred
+               so the shorter column sits against the middle of the taller QR */
             .panel-form {
-                flex: 0 0 360px;
+                display: flex;
+                flex: 0 0 330px;
+                flex-direction: column;
+                justify-content: center;
                 max-width: 100%;
+            }
+
+            header {
+                display: flex;
+                align-items: baseline;
+                gap: 8px;
+                padding-bottom: 8px;
+                border-bottom: 2px solid var(--line);
             }
 
             h1 {
                 margin: 0;
-                font-size: 18px;
+                font-size: 15px;
                 font-weight: 600;
-                line-height: 1.2;
                 letter-spacing: -0.01em;
             }
 
             .subtitle {
-                margin: 3px 0 0;
-                padding-bottom: 12px;
-                border-bottom: 2px solid var(--line);
+                margin: 0;
+                font-family: var(--mono);
+                font-size: 10px;
                 color: var(--muted);
-                font-size: 11px;
-                line-height: 1.2;
-                font-family: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
+            }
+
+            /* two fields per line: the form is short enough to stay on one
+               laptop screen only if nothing that fits side by side stacks */
+            .grid2 {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 8px;
+                margin-top: 8px;
+            }
+
+            /* grid items default to min-content width; a long filename or
+               device label would otherwise push the column wider */
+            .grid2 > * {
+                min-width: 0;
             }
 
             .field {
-                margin-top: 12px;
+                margin-top: 8px;
             }
 
             label {
                 display: block;
-                margin-bottom: 4px;
+                margin-bottom: 3px;
+                font-family: var(--mono);
+                font-size: 9px;
                 line-height: 1.2;
-                font-family: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
-                font-size: 11px;
                 color: var(--muted);
                 letter-spacing: 0.08em;
                 text-transform: uppercase;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
             }
 
             input[type="text"],
-            input[type="file"] {
+            input[type="file"],
+            select {
                 width: 100%;
-                padding: 7px 10px;
+                padding: 5px 7px;
                 font: inherit;
-                font-size: 13px;
-                line-height: 1.3;
+                font-family: var(--mono);
+                font-size: 11px;
+                line-height: 1.2;
                 color: var(--fg);
                 background: var(--card);
                 border: 1px solid var(--line);
                 outline: none;
             }
 
-            input[type="text"] {
-                font-family: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
-            }
-
             input[type="text"]:focus,
-            input[type="file"]:focus-visible {
+            input[type="file"]:focus-visible,
+            select:focus {
                 box-shadow: inset 0 0 0 2px var(--line);
             }
 
+            select:disabled {
+                color: var(--muted);
+                background: var(--bg);
+            }
+
+            input[type="file"] {
+                padding: 4px 6px;
+                overflow: hidden;
+            }
+
             input[type="file"]::file-selector-button {
-                margin-right: 8px;
-                padding: 3px 10px;
+                margin-right: 6px;
+                padding: 2px 7px;
                 font: inherit;
-                font-size: 12px;
+                font-size: 10px;
                 text-transform: uppercase;
                 letter-spacing: 0.06em;
                 color: var(--fg);
@@ -142,11 +182,10 @@
 
             button {
                 width: 100%;
-                margin-top: 14px;
-                padding: 9px 16px;
+                padding: 7px 12px;
                 font: inherit;
-                font-size: 12px;
-                line-height: 1.3;
+                font-size: 11px;
+                line-height: 1.2;
                 font-weight: 500;
                 letter-spacing: 0.1em;
                 text-transform: uppercase;
@@ -167,12 +206,34 @@
                 cursor: default;
             }
 
+            /* secondary action: outline rather than the solid black of a primary */
+            .btn-line {
+                color: var(--fg);
+                background: var(--card);
+                border: 1px solid var(--line);
+            }
+
+            .btn-line:hover:not(:disabled) {
+                color: var(--card);
+                background: var(--fg);
+            }
+
+            .btn-row {
+                display: flex;
+                gap: 8px;
+                margin-top: 8px;
+            }
+
+            .btn-row button {
+                flex: 1 1 0;
+            }
+
             #status {
-                margin: 8px 0 0;
-                min-height: 15px;
-                font-family: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
-                font-size: 11px;
-                line-height: 1.25;
+                margin: 6px 0 0;
+                min-height: 13px;
+                font-family: var(--mono);
+                font-size: 10px;
+                line-height: 1.3;
                 color: var(--muted);
             }
 
@@ -189,10 +250,19 @@
                 content: "✓ ";
             }
 
+            /* key state and its two actions share one line to save a row */
+            .keyline {
+                display: flex;
+                align-items: flex-start;
+                gap: 8px;
+                margin-top: 6px;
+            }
+
             .keyinfo {
-                margin: 6px 0 0;
-                font-family: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
-                font-size: 11px;
+                flex: 1 1 auto;
+                margin: 0;
+                font-family: var(--mono);
+                font-size: 10px;
                 line-height: 1.3;
                 color: var(--muted);
                 /* a fingerprint is one unbreakable token wider than the field */
@@ -210,120 +280,29 @@
 
             .key-row {
                 display: flex;
-                gap: 8px;
-                margin-top: 6px;
+                flex: 0 0 auto;
+                gap: 6px;
             }
 
             .key-row button {
-                flex: 1 1 0;
-            }
-
-            /* capped so a long URL in the meta table can't stretch the card */
-            #result {
-                flex: 0 0 auto;
-                max-width: 420px;
-                border-left: 2px solid var(--line);
-                text-align: center;
-            }
-
-            /* QR: pure black on white. The plate padding is the quiet zone —
-               keep it at 12px or more or cameras struggle to lock on. */
-            .qr-plate {
-                display: inline-block;
-                padding: 16px;
-                background: #fff;
-                border: 1px solid var(--line);
-                cursor: pointer;
-                user-select: none;
-            }
-
-            #qrcode img,
-            #qrcode canvas {
-                display: block;
-                transition: filter 0.15s linear;
-            }
-
-            .qr-plate.blurred #qrcode img,
-            .qr-plate.blurred #qrcode canvas {
-                filter: blur(14px);
-            }
-
-            /* secondary action: outline, not the solid black of the main button */
-            .btn-toggle {
                 width: auto;
-                margin: 0 0 12px;
-                padding: 5px 14px;
-                font-size: 11px;
-                color: var(--fg);
-                background: var(--card);
-                border: 1px solid var(--line);
-            }
-
-            .btn-toggle:hover:not(:disabled) {
-                color: var(--card);
-                background: var(--fg);
-            }
-
-            .scan-hint {
-                margin: 8px 0 8px;
-                font-family: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
-                font-size: 11px;
-                line-height: 1.25;
-                letter-spacing: 0.04em;
-                color: var(--muted);
-            }
-
-            .meta {
-                display: grid;
-                grid-template-columns: auto 1fr;
-                gap: 0;
-                margin: 0;
-                text-align: left;
-                font-size: 12px;
-                border-top: 1px solid var(--hairline);
-            }
-
-            .meta dt {
-                padding: 4px 10px 4px 0;
-                border-bottom: 1px solid var(--hairline);
-                font-family: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
+                padding: 4px 8px;
                 font-size: 10px;
-                line-height: 1.4;
                 letter-spacing: 0.06em;
-                text-transform: uppercase;
-                color: var(--muted);
-                white-space: nowrap;
-            }
-
-            .meta dd {
-                margin: 0;
-                padding: 4px 0;
-                border-bottom: 1px solid var(--hairline);
-                overflow-wrap: anywhere;
-                font-family: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
-                font-size: 11px;
-                line-height: 1.4;
-            }
-
-            .meta a {
-                color: inherit;
-                text-decoration-thickness: 1px;
-                text-underline-offset: 2px;
             }
 
             /* --- source picker + recorder --- */
 
             .seg {
                 display: flex;
-                margin-top: 14px;
+                margin-top: 10px;
                 border: 1px solid var(--line);
             }
 
             .seg button {
                 width: 50%;
-                margin: 0;
-                padding: 6px 8px;
-                font-size: 11px;
+                padding: 5px 6px;
+                font-size: 10px;
                 color: var(--fg);
                 background: var(--card);
                 border: none;
@@ -338,35 +317,15 @@
                 background: var(--fg);
             }
 
-            select {
-                width: 100%;
-                padding: 7px 10px;
-                font: inherit;
-                font-family: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
-                font-size: 12px;
-                line-height: 1.3;
-                color: var(--fg);
-                background: var(--card);
-                border: 1px solid var(--line);
-                outline: none;
-            }
-
-            select:focus {
-                box-shadow: inset 0 0 0 2px var(--line);
-            }
-
-            select:disabled {
-                color: var(--muted);
-                background: var(--bg);
-            }
-
-            /* the fallback shape holds before a stream arrives, so the card
-               doesn't jump the moment the camera connects; connect() then swaps
-               in whatever the camera actually delivers */
+            /* height-driven so the preview costs a fixed number of rows no
+               matter what shape the camera turns out to be; the fallback ratio
+               holds until connect() reports the real one */
             .preview-wrap {
                 position: relative;
-                margin-top: 12px;
+                height: 148px;
+                max-width: 100%;
                 aspect-ratio: var(--preview-ar, 16 / 9);
+                margin: 8px auto 0;
                 background: var(--fg);
                 border: 1px solid var(--line);
             }
@@ -385,8 +344,8 @@
                 display: flex;
                 align-items: center;
                 justify-content: center;
-                font-family: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
-                font-size: 11px;
+                font-family: var(--mono);
+                font-size: 10px;
                 letter-spacing: 0.08em;
                 color: var(--muted);
             }
@@ -395,18 +354,18 @@
                 display: flex;
                 align-items: center;
                 justify-content: space-between;
-                margin-top: 8px;
-                font-family: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
-                font-size: 11px;
+                margin-top: 6px;
+                font-family: var(--mono);
+                font-size: 10px;
                 letter-spacing: 0.06em;
                 color: var(--muted);
             }
 
             .rec-dot {
                 display: inline-block;
-                width: 8px;
-                height: 8px;
-                margin-right: 6px;
+                width: 7px;
+                height: 7px;
+                margin-right: 5px;
                 background: var(--hairline);
                 border-radius: 50%;
                 vertical-align: -1px;
@@ -434,8 +393,8 @@
             /* the cap needs to be visible at a glance mid-take, not just readable
                in the timer text */
             .rec-track {
-                height: 4px;
-                margin-top: 6px;
+                height: 3px;
+                margin-top: 5px;
                 background: var(--bg);
                 border: 1px solid var(--hairline);
             }
@@ -453,9 +412,9 @@
 
             .toggles {
                 display: flex;
-                gap: 18px;
-                margin-top: 14px;
-                padding-top: 12px;
+                gap: 14px;
+                margin-top: 8px;
+                padding-top: 8px;
                 border-top: 1px solid var(--hairline);
             }
 
@@ -463,18 +422,19 @@
             .check {
                 display: flex;
                 align-items: center;
-                gap: 7px;
+                gap: 6px;
                 margin: 0;
-                font-size: 11px;
+                font-size: 10px;
                 letter-spacing: 0.04em;
                 text-transform: none;
+                white-space: nowrap;
                 color: var(--fg);
                 cursor: pointer;
             }
 
             .check input {
-                width: 14px;
-                height: 14px;
+                width: 13px;
+                height: 13px;
                 margin: 0;
                 accent-color: var(--fg);
                 cursor: pointer;
@@ -508,24 +468,125 @@
                 pointer-events: none;
             }
 
-            /* secondary action: outline rather than the solid black of a primary */
-            .btn-line {
+            /* --- result --- */
+
+            #result {
+                display: flex;
+                flex: 0 0 auto;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                border-left: 2px solid var(--line);
+                text-align: center;
+            }
+
+            /* the display above would otherwise beat the hidden attribute */
+            #result[hidden] {
+                display: none;
+            }
+
+            /* QR: pure black on white. The plate padding is the quiet zone —
+               keep it at 12px or more or cameras struggle to lock on. */
+            .qr-plate {
+                padding: 12px;
+                background: #fff;
+                border: 1px solid var(--line);
+                cursor: pointer;
+                user-select: none;
+            }
+
+            #qrcode img,
+            #qrcode canvas {
+                display: block;
+                width: var(--qr);
+                height: auto;
+                transition: filter 0.15s linear;
+            }
+
+            .qr-plate.blurred #qrcode img,
+            .qr-plate.blurred #qrcode canvas {
+                filter: blur(14px);
+            }
+
+            .qr-foot {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 10px;
+                width: 100%;
+                margin-top: 8px;
+            }
+
+            .scan-hint {
+                margin: 0;
+                font-family: var(--mono);
+                font-size: 10px;
+                letter-spacing: 0.04em;
+                color: var(--muted);
+            }
+
+            /* secondary action: outline, not the solid black of the main button */
+            .btn-toggle {
+                width: auto;
+                flex: 0 0 auto;
+                padding: 4px 10px;
+                font-size: 10px;
                 color: var(--fg);
                 background: var(--card);
                 border: 1px solid var(--line);
             }
 
-            .btn-line:hover:not(:disabled) {
+            .btn-toggle:hover:not(:disabled) {
                 color: var(--card);
                 background: var(--fg);
             }
 
+            /* capped so a long URL in the meta table can't stretch the card */
+            .meta {
+                display: grid;
+                grid-template-columns: auto 1fr;
+                gap: 0;
+                width: 100%;
+                max-width: var(--qr);
+                margin: 8px 0 0;
+                text-align: left;
+                border-top: 1px solid var(--hairline);
+            }
+
+            .meta dt {
+                padding: 3px 8px 3px 0;
+                border-bottom: 1px solid var(--hairline);
+                font-family: var(--mono);
+                font-size: 9px;
+                line-height: 1.4;
+                letter-spacing: 0.06em;
+                text-transform: uppercase;
+                color: var(--muted);
+                white-space: nowrap;
+            }
+
+            .meta dd {
+                margin: 0;
+                padding: 3px 0;
+                border-bottom: 1px solid var(--hairline);
+                overflow-wrap: anywhere;
+                font-family: var(--mono);
+                font-size: 10px;
+                line-height: 1.4;
+            }
+
+            .meta a {
+                color: inherit;
+                text-decoration-thickness: 1px;
+                text-underline-offset: 2px;
+            }
+
             /* narrow windows: stack, and let the QR shrink to fit */
-            @media (max-width: 800px) {
+            @media (max-width: 780px) {
                 .card {
                     flex-direction: column;
                     width: 100%;
-                    max-width: 400px;
+                    max-width: 360px;
                 }
 
                 .panel-form {
@@ -535,14 +596,13 @@
                 #result {
                     border-left: none;
                     border-top: 2px solid var(--line);
-                    padding-top: 14px;
                 }
 
                 #qrcode img,
-                #qrcode canvas {
+                #qrcode canvas,
+                .meta {
                     width: 100%;
-                    height: auto;
-                    max-width: 320px;
+                    max-width: 100%;
                 }
             }
         </style>
@@ -550,26 +610,34 @@
     <body>
         <main class="card">
             <section class="panel panel-form">
-                <h1>上傳影片</h1>
-                <p class="subtitle">上傳後會產生可掃描的影片連結</p>
+                <header>
+                    <h1>上傳影片</h1>
+                    <p class="subtitle">上傳後產生可掃描的連結</p>
+                </header>
 
-                <div class="field">
-                    <label for="apiBase">API 母網址</label>
-                    <input
-                        type="text"
-                        id="apiBase"
-                        value="https://pod-backend.algasami.com"
-                        spellcheck="false"
-                    />
+                <div class="grid2">
+                    <div>
+                        <label for="apiBase">API 母網址</label>
+                        <input
+                            type="text"
+                            id="apiBase"
+                            value="https://pod-backend.algasami.com"
+                            spellcheck="false"
+                        />
+                    </div>
+                    <div>
+                        <label for="identityFile" title="ssh-keygen 產生的私鑰檔">
+                            上傳金鑰（私鑰檔）
+                        </label>
+                        <input type="file" id="identityFile" />
+                    </div>
                 </div>
 
-                <div class="field">
-                    <label for="identityFile">上傳金鑰（ssh-keygen 產生的私鑰檔）</label>
-                    <input type="file" id="identityFile" />
+                <div class="keyline">
                     <p id="identityState" class="keyinfo"></p>
                     <div class="key-row">
-                        <button id="identityTest" class="btn-line" type="button">測試連線</button>
-                        <button id="identityClear" class="btn-line" type="button">移除金鑰</button>
+                        <button id="identityTest" class="btn-line" type="button">測試</button>
+                        <button id="identityClear" class="btn-line" type="button">移除</button>
                     </div>
                 </div>
 
@@ -579,14 +647,15 @@
                 </div>
 
                 <div id="paneRecord">
-                    <div class="field">
-                        <label for="videoDevice">視訊來源</label>
-                        <select id="videoDevice"></select>
-                    </div>
-
-                    <div class="field">
-                        <label for="audioDevice">音訊來源</label>
-                        <select id="audioDevice"></select>
+                    <div class="grid2">
+                        <div>
+                            <label for="videoDevice">視訊來源</label>
+                            <select id="videoDevice"></select>
+                        </div>
+                        <div>
+                            <label for="audioDevice">音訊來源</label>
+                            <select id="audioDevice"></select>
+                        </div>
                     </div>
 
                     <div class="preview-wrap idle">
@@ -611,8 +680,10 @@
 
                     <div class="rec-track"><div class="rec-fill" id="recFill"></div></div>
 
-                    <button id="connectBtn" class="btn-line" type="button">連接相機</button>
-                    <button id="recordBtn" type="button" disabled>開始錄影</button>
+                    <div class="btn-row">
+                        <button id="connectBtn" class="btn-line" type="button">連接相機</button>
+                        <button id="recordBtn" type="button" disabled>開始錄影</button>
+                    </div>
                 </div>
 
                 <div id="paneFile" hidden>
@@ -621,7 +692,9 @@
                         <input type="file" id="videoFile" name="file" accept="video/*" />
                     </div>
 
-                    <button id="uploadBtn" type="button">上傳</button>
+                    <div class="btn-row">
+                        <button id="uploadBtn" type="button">上傳</button>
+                    </div>
                 </div>
 
                 <div class="toggles">
@@ -640,17 +713,19 @@
 
             <section class="panel" id="result" hidden>
                 <div class="qr-plate"><div id="qrcode"></div></div>
-                <p class="scan-hint">用手機相機掃描即可觀看</p>
-                <button id="blurBtn" class="btn-toggle" type="button" aria-pressed="false">
-                    隱藏 QR
-                </button>
+                <div class="qr-foot">
+                    <p class="scan-hint">用手機相機掃描即可觀看</p>
+                    <button id="blurBtn" class="btn-toggle" type="button" aria-pressed="false">
+                        隱藏 QR
+                    </button>
+                </div>
                 <dl class="meta">
-                    <dt>訊息</dt>
-                    <dd id="message"></dd>
                     <dt>ID</dt>
                     <dd id="id"></dd>
                     <dt>連結</dt>
                     <dd><a id="videoLink" href="#" target="_blank" rel="noopener"></a></dd>
+                    <dt>訊息</dt>
+                    <dd id="message"></dd>
                 </dl>
             </section>
         </main>
@@ -1223,11 +1298,11 @@
                 setBlurred(false);
                 new QRCode(qrcodeDiv, {
                     text: videoUrl,
-                    // sized for scanning from ~0.7 m: phone cameras need
-                    // roughly distance/10 of QR width, so ~7 cm ≈ 265 CSS px
-                    // minimum — 340 leaves headroom on scaled displays.
-                    width: 340,
-                    height: 340,
+                    // sized for scanning across a room: phone cameras need
+                    // roughly distance/10 of QR width, so 480 px covers ~1.2 m.
+                    // CSS (--qr) scales it down on a short viewport.
+                    width: 480,
+                    height: 480,
                     colorDark: "#000000",
                     colorLight: "#ffffff",
                     correctLevel: QRCode.CorrectLevel.H,
