@@ -189,6 +189,35 @@
                 content: "✓ ";
             }
 
+            .keyinfo {
+                margin: 6px 0 0;
+                font-family: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
+                font-size: 11px;
+                line-height: 1.3;
+                color: var(--muted);
+                /* a fingerprint is one unbreakable token wider than the field */
+                overflow-wrap: anywhere;
+            }
+
+            .keyinfo.error {
+                color: var(--fg);
+                font-weight: 500;
+            }
+
+            .keyinfo.error::before {
+                content: "! ";
+            }
+
+            .key-row {
+                display: flex;
+                gap: 8px;
+                margin-top: 6px;
+            }
+
+            .key-row button {
+                flex: 1 1 0;
+            }
+
             /* capped so a long URL in the meta table can't stretch the card */
             #result {
                 flex: 0 0 auto;
@@ -534,6 +563,16 @@
                     />
                 </div>
 
+                <div class="field">
+                    <label for="identityFile">上傳金鑰</label>
+                    <input type="file" id="identityFile" accept=".json,application/json" />
+                    <p id="identityState" class="keyinfo"></p>
+                    <div class="key-row">
+                        <button id="identityTest" class="btn-line" type="button">測試連線</button>
+                        <button id="identityClear" class="btn-line" type="button">移除金鑰</button>
+                    </div>
+                </div>
+
                 <div class="seg">
                     <button id="tabRecord" type="button" aria-selected="true">錄影</button>
                     <button id="tabFile" type="button" aria-selected="false">上傳檔案</button>
@@ -562,6 +601,8 @@
                             />
                         </div>
                     </div>
+
+                    <canvas id="scaler" hidden></canvas>
 
                     <div class="rec-bar">
                         <span><span class="rec-dot"></span><span id="recState">待機</span></span>
@@ -646,8 +687,15 @@
             const optWatermark = document.getElementById("optWatermark");
             const optVertical = document.getElementById("optVertical");
             const cropFrame = document.getElementById("cropFrame");
+            const scaler = document.getElementById("scaler");
             const wmPreview = document.getElementById("wmPreview");
 
+            const identityFile = document.getElementById("identityFile");
+            const identityState = document.getElementById("identityState");
+            const identityTest = document.getElementById("identityTest");
+            const identityClear = document.getElementById("identityClear");
+
+            const LS_IDENTITY = "pod.identity";
             const LS_VIDEO = "pod.videoDeviceId";
             const LS_AUDIO = "pod.audioDeviceId";
             const LS_WATERMARK = "pod.optWatermark";
@@ -664,6 +712,7 @@
             const MAX_VIDEO_BITS = 24000000;
             const AUDIO_BITS = 384000;
             const MAX_SECONDS = 60;
+            const CAPTURE_FPS = 30;
 
             function videoBitsFor(settings) {
                 const pixels = (settings.width || 1920) * (settings.height || 1080);
@@ -685,7 +734,57 @@
                 "video/webm",
             ];
 
+            // Geometry mirrored from the backend so the take can be cropped and
+            // downscaled before it is ever encoded — see verticalCrop,
+            // fitVerticalSize and fitOutputSize in video-processor.ts. The server
+            // still applies the same rules to whatever arrives, so this is an
+            // optimisation rather than the authority: a file-picker upload, or a
+            // browser without canvas capture, still gets sized correctly there.
+            const OUT_MAX_SHORT_SIDE = 1080;
+            const VERTICAL_ASPECT = 9 / 16;
+            const toEven = (n) => Math.max(2, Math.round(n / 2) * 2);
+
+            function outputGeometry(settings, vertical) {
+                const width = settings.width || 1920;
+                const height = settings.height || 1080;
+
+                let crop = { x: 0, y: 0, width, height };
+                if (vertical) {
+                    const cw = Math.min(width, toEven(height * VERTICAL_ASPECT));
+                    const ch = Math.min(height, toEven(cw / VERTICAL_ASPECT));
+                    crop = {
+                        x: Math.round((width - cw) / 2),
+                        y: Math.round((height - ch) / 2),
+                        width: cw,
+                        height: ch,
+                    };
+                }
+
+                let target;
+                if (vertical) {
+                    const w = toEven(Math.min(OUT_MAX_SHORT_SIDE, crop.width));
+                    // clamped to the crop: the derived 9:16 height can ask for
+                    // more rows than were cropped, and must not stretch them
+                    target = {
+                        width: w,
+                        height: Math.min(toEven(crop.height), toEven(w / VERTICAL_ASPECT)),
+                    };
+                } else {
+                    const fit = Math.min(1, OUT_MAX_SHORT_SIDE / Math.min(crop.width, crop.height));
+                    target = {
+                        width: toEven(crop.width * fit),
+                        height: toEven(crop.height * fit),
+                    };
+                }
+                return { crop, target };
+            }
+
             let stream = null;
+            // what MediaRecorder is actually fed: the canvas-scaled stream when
+            // the browser can give us one, otherwise the camera stream itself
+            let recordStream = null;
+            let drawHandle = null;
+            let drawViaFrameCallback = false;
             let recorder = null;
             let chunks = [];
             let timerId = null;
@@ -720,7 +819,11 @@
                     mimeType: recorder ? recorder.mimeType : null,
                     chunks: chunks.length,
                     bytes: chunks.reduce((n, c) => n + c.size, 0),
-                    tracks: stream ? stream.getTracks().map(trackDiag) : [],
+                    scaled: recordStream !== null && recordStream !== stream,
+                    tracks:
+                        recordStream || stream
+                            ? (recordStream || stream).getTracks().map(trackDiag)
+                            : [],
                 };
                 console.log("[pod]", label, info);
                 return info;
@@ -786,6 +889,124 @@
                 );
             }
 
+            // ---- auth: SSH-style challenge/response ----
+            //
+            // The server holds this client's public key; the private half never
+            // leaves the browser. To upload we ask for a nonce, sign it, and
+            // trade the signature for a short-lived bearer token. Everything
+            // here mirrors services/auth-session.ts on the backend.
+
+            let identity = null; // { fingerprint, comment, privateJwk }
+            let signingKey = null; // the imported, non-extractable CryptoKey
+            let session = null; // { token, expiresAt }
+            let handshake = null; // in-flight handshake, shared by callers
+
+            function base64(bytes) {
+                let out = "";
+                for (const b of new Uint8Array(bytes)) out += String.fromCharCode(b);
+                return btoa(out);
+            }
+
+            function showIdentity(text, kind) {
+                identityState.textContent = text;
+                identityState.className = "keyinfo" + (kind ? " " + kind : "");
+            }
+
+            function setIdentity(next) {
+                identity = next;
+                // A different key invalidates anything derived from the old one.
+                signingKey = null;
+                session = null;
+                handshake = null;
+
+                if (!next) {
+                    identityClear.disabled = true;
+                    showIdentity("未載入金鑰，無法上傳。", "error");
+                    return;
+                }
+                identityClear.disabled = false;
+                showIdentity((next.comment ? next.comment + " · " : "") + next.fingerprint);
+            }
+
+            function parseIdentity(text) {
+                const parsed = JSON.parse(text);
+                const jwk = parsed && parsed.privateJwk;
+                if (!parsed.fingerprint || !jwk || jwk.kty !== "OKP" || jwk.crv !== "Ed25519") {
+                    throw new Error("不是有效的 pod-identity.json");
+                }
+                return {
+                    fingerprint: parsed.fingerprint,
+                    comment: parsed.comment || "",
+                    privateJwk: jwk,
+                };
+            }
+
+            async function getSigningKey() {
+                if (!signingKey) {
+                    // extractable: false — once imported the key can sign but
+                    // can no longer be read back out, not even by this page.
+                    signingKey = await crypto.subtle.importKey(
+                        "jwk",
+                        identity.privateJwk,
+                        { name: "Ed25519" },
+                        false,
+                        ["sign"],
+                    );
+                }
+                return signingKey;
+            }
+
+            async function runHandshake(base) {
+                const challengeRes = await fetch(base + "/auth/challenge", { cache: "no-store" });
+                if (!challengeRes.ok) throw new Error("無法取得驗證挑戰碼");
+                const { challenge } = await challengeRes.json();
+
+                // Byte-for-byte the message challengeMessage() rebuilds server-side.
+                const message = new TextEncoder().encode(
+                    "pod-auth-v1\n" + challenge + "\n" + identity.fingerprint,
+                );
+                const signature = await crypto.subtle.sign(
+                    "Ed25519",
+                    await getSigningKey(),
+                    message,
+                );
+
+                const verifyRes = await fetch(base + "/auth/verify", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        fingerprint: identity.fingerprint,
+                        challenge,
+                        signature: base64(signature),
+                    }),
+                });
+                if (verifyRes.status === 401) throw new Error("此金鑰未被伺服器授權");
+                if (!verifyRes.ok) throw new Error("驗證失敗：" + verifyRes.status);
+
+                const data = await verifyRes.json();
+                return { token: data.token, expiresAt: data.expiresAt };
+            }
+
+            // Re-signs a minute before expiry so a long upload cannot start on a
+            // token that dies mid-transfer. Parallel callers share one handshake
+            // rather than each spending a challenge.
+            async function authToken(base) {
+                if (!identity) throw new Error("請先載入上傳金鑰");
+                if (session && session.expiresAt - Date.now() > 60000) return session.token;
+
+                if (!handshake) {
+                    handshake = runHandshake(base)
+                        .then((next) => {
+                            session = next;
+                            return next.token;
+                        })
+                        .finally(() => {
+                            handshake = null;
+                        });
+                }
+                return handshake;
+            }
+
             // ---- upload + QR, shared by the recorder and the file picker ----
 
             async function uploadFile(file) {
@@ -806,11 +1027,29 @@
                 );
                 result.hidden = true;
 
-                const res = await fetch(base + "/", {
-                    method: "POST",
-                    body: formData,
-                });
+                const send = async (token) =>
+                    fetch(base + "/", {
+                        method: "POST",
+                        headers: { Authorization: "Bearer " + token },
+                        body: formData,
+                    });
 
+                let res = await send(await authToken(base));
+                if (res.status === 401) {
+                    // The server restarted, or the token aged out in flight;
+                    // one fresh handshake tells the two cases apart from a key
+                    // that is genuinely not authorized.
+                    session = null;
+                    res = await send(await authToken(base));
+                }
+
+                if (res.status === 401) {
+                    throw new Error("未授權：此金鑰無法上傳");
+                }
+                if (res.status === 429) {
+                    const wait = res.headers.get("Retry-After");
+                    throw new Error("上傳太頻繁，請於 " + (wait || "數") + " 秒後再試");
+                }
                 if (!res.ok) {
                     throw new Error("Upload failed: " + res.status);
                 }
@@ -911,6 +1150,7 @@
             // ---- connect / disconnect ----
 
             function disconnect() {
+                teardownRecordStream();
                 if (stream) {
                     stream.getTracks().forEach((t) => t.stop());
                     stream = null;
@@ -943,7 +1183,7 @@
                         // without surviving into the deliverable.
                         width: { ideal: 3840 },
                         height: { ideal: 2160 },
-                        frameRate: { ideal: 30, max: 30 },
+                        frameRate: { ideal: CAPTURE_FPS, max: CAPTURE_FPS },
                     },
                     audio: {
                         ...(a ? { deviceId: { exact: a } } : {}),
@@ -1044,6 +1284,80 @@
                 }
             }
 
+            // Frames go camera -> canvas -> encoder, so the crop and the 1080p
+            // downscale happen before compression. That is what keeps the upload
+            // small, and it also spares the take a generation of loss: the
+            // picture is encoded once here instead of being encoded at capture
+            // size and transcoded again on the server.
+            function buildScaledStream(geom) {
+                if (typeof scaler.captureStream !== "function") return null;
+
+                const { crop, target } = geom;
+                scaler.width = target.width;
+                scaler.height = target.height;
+
+                const ctx = scaler.getContext("2d", { alpha: false });
+                if (!ctx) return null;
+
+                const draw = () => {
+                    ctx.drawImage(
+                        preview,
+                        crop.x,
+                        crop.y,
+                        crop.width,
+                        crop.height,
+                        0,
+                        0,
+                        target.width,
+                        target.height,
+                    );
+                    scheduleDraw(draw);
+                };
+                draw();
+
+                const canvasStream = scaler.captureStream(CAPTURE_FPS);
+                if (!canvasStream.getVideoTracks().length) {
+                    cancelDraw();
+                    return null;
+                }
+                // the audio tracks stay the camera's own — only the picture is
+                // rebuilt, so nothing is re-encoded twice on the way in
+                return new MediaStream([
+                    ...canvasStream.getVideoTracks(),
+                    ...stream.getAudioTracks(),
+                ]);
+            }
+
+            // requestVideoFrameCallback fires once per decoded camera frame, so
+            // the canvas neither duplicates nor drops one; rAF is the fallback
+            // where it is missing.
+            function scheduleDraw(fn) {
+                if (typeof preview.requestVideoFrameCallback === "function") {
+                    drawViaFrameCallback = true;
+                    drawHandle = preview.requestVideoFrameCallback(fn);
+                } else {
+                    drawViaFrameCallback = false;
+                    drawHandle = requestAnimationFrame(fn);
+                }
+            }
+
+            function cancelDraw() {
+                if (drawHandle === null) return;
+                if (drawViaFrameCallback) preview.cancelVideoFrameCallback(drawHandle);
+                else cancelAnimationFrame(drawHandle);
+                drawHandle = null;
+            }
+
+            function teardownRecordStream() {
+                cancelDraw();
+                if (recordStream && recordStream !== stream) {
+                    // only the canvas video track is ours to stop; the audio
+                    // tracks belong to the camera stream and outlive the take
+                    recordStream.getVideoTracks().forEach((t) => t.stop());
+                }
+                recordStream = null;
+            }
+
             function startRecording() {
                 const mimeType = pickMime();
                 if (!mimeType) {
@@ -1051,12 +1365,21 @@
                     return;
                 }
 
+                const source = stream.getVideoTracks()[0].getSettings();
+                const geom = outputGeometry(source, optVertical.checked);
+                const scaled = buildScaledStream(geom);
+                recordStream = scaled || stream;
+                // bitrate has to match what is actually being encoded: the
+                // scaled frame when the canvas path is live, the raw camera
+                // frame when it is not
+                const encoded = scaled ? geom.target : source;
+
                 chunks = [];
                 finalizing = false;
                 autoStopped = false;
-                recorder = new MediaRecorder(stream, {
+                recorder = new MediaRecorder(recordStream, {
                     mimeType,
-                    videoBitsPerSecond: videoBitsFor(stream.getVideoTracks()[0].getSettings()),
+                    videoBitsPerSecond: videoBitsFor(encoded),
                     audioBitsPerSecond: AUDIO_BITS,
                 });
                 recorder.ondataavailable = (e) => {
@@ -1093,7 +1416,14 @@
                 connectBtn.disabled = true;
                 videoDevice.disabled = true;
                 audioDevice.disabled = true;
-                setStatus("錄影中… " + (recorder.mimeType || mimeType));
+                setStatus(
+                    "錄影中… " +
+                        encoded.width +
+                        "×" +
+                        encoded.height +
+                        " · " +
+                        (recorder.mimeType || mimeType),
+                );
             }
 
             // Chrome can wedge inside stop() — most often when one track has
@@ -1130,6 +1460,8 @@
                 clearTimeout(stopWatchdog);
                 clearInterval(timerId);
                 diag("finalize");
+
+                teardownRecordStream();
 
                 recBar.classList.remove("live");
                 resetMeter();
@@ -1205,6 +1537,53 @@
                     if (after) after();
                 });
             }
+
+            identityFile.addEventListener("change", async () => {
+                const file = identityFile.files[0];
+                if (!file) return;
+                try {
+                    const next = parseIdentity(await file.text());
+                    // Kept locally so the key survives a reload; it is only ever
+                    // sent to the browser's own crypto, never to the server.
+                    localStorage.setItem(LS_IDENTITY, JSON.stringify(next));
+                    setIdentity(next);
+                } catch (err) {
+                    showIdentity("金鑰讀取失敗：" + err.message, "error");
+                } finally {
+                    // Clearing the picker lets the same file be re-selected.
+                    identityFile.value = "";
+                }
+            });
+
+            identityClear.addEventListener("click", () => {
+                localStorage.removeItem(LS_IDENTITY);
+                setIdentity(null);
+            });
+
+            identityTest.addEventListener("click", async () => {
+                identityTest.disabled = true;
+                try {
+                    session = null;
+                    await authToken(apiBase.value.replace(/\/$/, ""));
+                    setStatus("金鑰驗證成功，可以上傳。", "done");
+                } catch (err) {
+                    setStatus("錯誤：" + err.message, "error");
+                } finally {
+                    identityTest.disabled = false;
+                }
+            });
+
+            (function restoreIdentity() {
+                const stored = localStorage.getItem(LS_IDENTITY);
+                if (!stored) return setIdentity(null);
+                try {
+                    setIdentity(parseIdentity(stored));
+                } catch {
+                    // A stored blob that no longer parses is worse than none.
+                    localStorage.removeItem(LS_IDENTITY);
+                    setIdentity(null);
+                }
+            })();
 
             bindToggle(optWatermark, LS_WATERMARK, syncPreviewOverlays);
             bindToggle(optVertical, LS_VERTICAL, syncPreviewOverlays);
