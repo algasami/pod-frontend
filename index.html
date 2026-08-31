@@ -204,15 +204,39 @@
                 padding: 16px;
                 background: #fff;
                 border: 1px solid var(--line);
+                cursor: pointer;
+                user-select: none;
             }
 
             #qrcode img,
             #qrcode canvas {
                 display: block;
+                transition: filter 0.15s linear;
+            }
+
+            .qr-plate.blurred #qrcode img,
+            .qr-plate.blurred #qrcode canvas {
+                filter: blur(14px);
+            }
+
+            /* secondary action: outline, not the solid black of the main button */
+            .btn-toggle {
+                width: auto;
+                margin: 0 0 12px;
+                padding: 5px 14px;
+                font-size: 11px;
+                color: var(--fg);
+                background: var(--card);
+                border: 1px solid var(--line);
+            }
+
+            .btn-toggle:hover:not(:disabled) {
+                color: var(--card);
+                background: var(--fg);
             }
 
             .scan-hint {
-                margin: 8px 0 12px;
+                margin: 8px 0 8px;
                 font-family: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
                 font-size: 11px;
                 line-height: 1.25;
@@ -313,6 +337,9 @@
             <section class="panel" id="result" hidden>
                 <div class="qr-plate"><div id="qrcode"></div></div>
                 <p class="scan-hint">用手機相機掃描即可觀看</p>
+                <button id="blurBtn" class="btn-toggle" type="button" aria-pressed="false">
+                    隱藏 QR
+                </button>
                 <dl class="meta">
                     <dt>訊息</dt>
                     <dd id="message"></dd>
@@ -334,11 +361,28 @@
             const idEl = document.getElementById("id");
             const videoLink = document.getElementById("videoLink");
             const qrcodeDiv = document.getElementById("qrcode");
+            const qrPlate = document.querySelector(".qr-plate");
+            const blurBtn = document.getElementById("blurBtn");
 
             function setStatus(text, kind) {
                 status.textContent = text;
                 status.className = kind || "";
             }
+
+            function setBlurred(on) {
+                qrPlate.classList.toggle("blurred", on);
+                blurBtn.setAttribute("aria-pressed", String(on));
+                blurBtn.textContent = on ? "顯示 QR" : "隱藏 QR";
+            }
+
+            function toggleBlur() {
+                setBlurred(!qrPlate.classList.contains("blurred"));
+            }
+
+            blurBtn.addEventListener("click", toggleBlur);
+            // the plate is a mouse shortcut for the same action; keyboard and
+            // screen-reader users get it through blurBtn
+            qrPlate.addEventListener("click", toggleBlur);
 
             uploadBtn.addEventListener("click", async () => {
                 const file = videoFile.files[0];
@@ -377,6 +421,7 @@
                     videoLink.textContent = videoUrl;
 
                     qrcodeDiv.innerHTML = "";
+                    setBlurred(false);
                     new QRCode(qrcodeDiv, {
                         text: videoUrl,
                         // sized for scanning from ~0.7 m: phone cameras need
