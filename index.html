@@ -451,6 +451,23 @@
                 cursor: pointer;
             }
 
+            /* the region the backend will actually deliver: the whole frame,
+               or the centred 9:16 slice once the take is flagged vertical. The
+               watermark preview sits inside it so its offsets stay truthful
+               against the crop rather than against the padded camera frame. */
+            .crop-frame {
+                position: absolute;
+                inset: 0;
+                pointer-events: none;
+            }
+
+            .crop-frame.vertical {
+                inset: 0 auto 0 50%;
+                transform: translateX(-50%);
+                aspect-ratio: 9 / 16;
+                box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.65) inset;
+            }
+
             /* mirrors the server-side overlay geometry exactly: 10% of frame
                width, 1.67% margin, top-right — see WATERMARK_WIDTH_RATIO and
                WATERMARK_MARGIN_RATIO in the backend config */
@@ -535,13 +552,15 @@
 
                     <div class="preview-wrap idle">
                         <video id="preview" muted playsinline></video>
-                        <img
-                            id="wmPreview"
-                            class="wm-preview"
-                            src="resources/logo_text_only.png"
-                            alt=""
-                            hidden
-                        />
+                        <div id="cropFrame" class="crop-frame">
+                            <img
+                                id="wmPreview"
+                                class="wm-preview"
+                                src="resources/logo_text_only.png"
+                                alt=""
+                                hidden
+                            />
+                        </div>
                     </div>
 
                     <div class="rec-bar">
@@ -568,6 +587,10 @@
                     <label class="check">
                         <input type="checkbox" id="optWatermark" />
                         <span>浮水印</span>
+                    </label>
+                    <label class="check">
+                        <input type="checkbox" id="optVertical" />
+                        <span>直式 9:16</span>
                     </label>
                 </div>
 
@@ -621,17 +644,32 @@
             const uploadBtn = document.getElementById("uploadBtn");
             const videoFile = document.getElementById("videoFile");
             const optWatermark = document.getElementById("optWatermark");
+            const optVertical = document.getElementById("optVertical");
+            const cropFrame = document.getElementById("cropFrame");
             const wmPreview = document.getElementById("wmPreview");
 
             const LS_VIDEO = "pod.videoDeviceId";
             const LS_AUDIO = "pod.audioDeviceId";
             const LS_WATERMARK = "pod.optWatermark";
+            const LS_VERTICAL = "pod.optVertical";
 
-            // YouTube's recommended SDR upload bitrates for 1080p at standard
-            // frame rate: 8 Mbps video, 384 kbps stereo audio.
-            const VIDEO_BITS = 8000000;
+            // YouTube's recommended SDR upload bitrate for 1080p30 is 8 Mbps
+            // video, 384 kbps stereo audio. Now that capture is uncapped the
+            // video rate has to track the pixel count, or a 4K take arrives
+            // starved and the downscale has nothing good to work from.
+            const BASE_VIDEO_BITS = 8000000;
+            const BASE_PIXELS = 1920 * 1080;
+            // ceiling chosen against the server's UPLOAD_MAX_MB (256 MB):
+            // 24 Mbps for MAX_SECONDS is ~180 MB, which leaves room.
+            const MAX_VIDEO_BITS = 24000000;
             const AUDIO_BITS = 384000;
             const MAX_SECONDS = 60;
+
+            function videoBitsFor(settings) {
+                const pixels = (settings.width || 1920) * (settings.height || 1080);
+                const scaled = (BASE_VIDEO_BITS * pixels) / BASE_PIXELS;
+                return Math.round(Math.min(MAX_VIDEO_BITS, Math.max(BASE_VIDEO_BITS, scaled)));
+            }
 
             // Bare "video/mp4" first on purpose: naming a profile/level here
             // (avc1.42E01E is Baseline 3.0, which tops out at 720p30) can hand
@@ -753,14 +791,16 @@
             async function uploadFile(file) {
                 const base = apiBase.value.replace(/\/$/, "");
                 const wantWatermark = optWatermark.checked;
+                const wantVertical = optVertical.checked;
 
                 const formData = new FormData();
-                // flag first so multer has it parsed before the file body
+                // flags first so multer has them parsed before the file body
                 formData.append("watermark", wantWatermark ? "1" : "0");
+                formData.append("vertical", wantVertical ? "1" : "0");
                 formData.append("file", file);
 
                 setStatus(
-                    wantWatermark
+                    wantWatermark || wantVertical
                         ? "上傳中… " + formatSize(file.size) + "（伺服器合成需要一點時間）"
                         : "上傳中… " + formatSize(file.size),
                 );
@@ -893,12 +933,17 @@
                 stream = await navigator.mediaDevices.getUserMedia({
                     video: {
                         ...(v ? { deviceId: { exact: v } } : {}),
-                        // ideals, not caps: a portrait camera is free to hand
-                        // back 1080x1920, and the pipeline keeps whatever shape
-                        // it delivers
-                        width: { ideal: 1920 },
-                        height: { ideal: 1080 },
-                        frameRate: { ideal: 30 },
+                        // No ceiling here: take the camera's best mode and let
+                        // the backend downscale to 1080p afterwards. On a camera
+                        // that pillarboxes a rotated take rather than changing
+                        // resolution (Osmo Pocket), capturing 4K is what makes a
+                        // real 1080x1920 possible at all — the 9:16 crop keeps
+                        // 1216 columns of picture there against 608 from a 1080p
+                        // capture. Frame rate stays capped: it costs file size
+                        // without surviving into the deliverable.
+                        width: { ideal: 3840 },
+                        height: { ideal: 2160 },
+                        frameRate: { ideal: 30, max: 30 },
                     },
                     audio: {
                         ...(a ? { deviceId: { exact: a } } : {}),
@@ -1011,7 +1056,7 @@
                 autoStopped = false;
                 recorder = new MediaRecorder(stream, {
                     mimeType,
-                    videoBitsPerSecond: VIDEO_BITS,
+                    videoBitsPerSecond: videoBitsFor(stream.getVideoTracks()[0].getSettings()),
                     audioBitsPerSecond: AUDIO_BITS,
                 });
                 recorder.ondataavailable = (e) => {
@@ -1148,8 +1193,9 @@
 
             // ---- init ----
 
-            function syncWatermarkPreview() {
+            function syncPreviewOverlays() {
                 wmPreview.hidden = !optWatermark.checked;
+                cropFrame.classList.toggle("vertical", optVertical.checked);
             }
 
             function bindToggle(el, key, after) {
@@ -1160,8 +1206,9 @@
                 });
             }
 
-            bindToggle(optWatermark, LS_WATERMARK, syncWatermarkPreview);
-            syncWatermarkPreview();
+            bindToggle(optWatermark, LS_WATERMARK, syncPreviewOverlays);
+            bindToggle(optVertical, LS_VERTICAL, syncPreviewOverlays);
+            syncPreviewOverlays();
 
             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
                 // getUserMedia needs a secure context: file:// will not do
