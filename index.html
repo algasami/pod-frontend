@@ -282,6 +282,133 @@
                 text-underline-offset: 2px;
             }
 
+            /* --- source picker + recorder --- */
+
+            .seg {
+                display: flex;
+                margin-top: 14px;
+                border: 1px solid var(--line);
+            }
+
+            .seg button {
+                width: 50%;
+                margin: 0;
+                padding: 6px 8px;
+                font-size: 11px;
+                color: var(--fg);
+                background: var(--card);
+                border: none;
+            }
+
+            .seg button + button {
+                border-left: 1px solid var(--line);
+            }
+
+            .seg button[aria-selected="true"] {
+                color: var(--card);
+                background: var(--fg);
+            }
+
+            select {
+                width: 100%;
+                padding: 7px 10px;
+                font: inherit;
+                font-family: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
+                font-size: 12px;
+                line-height: 1.3;
+                color: var(--fg);
+                background: var(--card);
+                border: 1px solid var(--line);
+                outline: none;
+            }
+
+            select:focus {
+                box-shadow: inset 0 0 0 2px var(--line);
+            }
+
+            select:disabled {
+                color: var(--muted);
+                background: var(--bg);
+            }
+
+            /* the 16:9 box holds its shape before a stream arrives, so the card
+               doesn't jump the moment the camera connects */
+            .preview-wrap {
+                position: relative;
+                margin-top: 12px;
+                aspect-ratio: 16 / 9;
+                background: var(--fg);
+                border: 1px solid var(--line);
+            }
+
+            #preview {
+                display: block;
+                width: 100%;
+                height: 100%;
+                object-fit: contain;
+            }
+
+            .preview-wrap.idle::after {
+                content: "尚未連接";
+                position: absolute;
+                inset: 0;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-family: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
+                font-size: 11px;
+                letter-spacing: 0.08em;
+                color: var(--muted);
+            }
+
+            .rec-bar {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                margin-top: 8px;
+                font-family: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
+                font-size: 11px;
+                letter-spacing: 0.06em;
+                color: var(--muted);
+            }
+
+            .rec-dot {
+                display: inline-block;
+                width: 8px;
+                height: 8px;
+                margin-right: 6px;
+                background: var(--hairline);
+                border-radius: 50%;
+                vertical-align: -1px;
+            }
+
+            .rec-bar.live {
+                color: var(--fg);
+            }
+
+            .rec-bar.live .rec-dot {
+                background: #cc0000;
+                animation: rec-pulse 1.2s steps(1, end) infinite;
+            }
+
+            @keyframes rec-pulse {
+                50% {
+                    opacity: 0.25;
+                }
+            }
+
+            /* secondary action: outline rather than the solid black of a primary */
+            .btn-line {
+                color: var(--fg);
+                background: var(--card);
+                border: 1px solid var(--line);
+            }
+
+            .btn-line:hover:not(:disabled) {
+                color: var(--card);
+                background: var(--fg);
+            }
+
             /* narrow windows: stack, and let the QR shrink to fit */
             @media (max-width: 800px) {
                 .card {
@@ -325,12 +452,44 @@
                     />
                 </div>
 
-                <div class="field">
-                    <label for="videoFile">影片檔案</label>
-                    <input type="file" id="videoFile" name="file" accept="video/*" />
+                <div class="seg">
+                    <button id="tabRecord" type="button" aria-selected="true">錄影</button>
+                    <button id="tabFile" type="button" aria-selected="false">上傳檔案</button>
                 </div>
 
-                <button id="uploadBtn">上傳</button>
+                <div id="paneRecord">
+                    <div class="field">
+                        <label for="videoDevice">視訊來源</label>
+                        <select id="videoDevice"></select>
+                    </div>
+
+                    <div class="field">
+                        <label for="audioDevice">音訊來源</label>
+                        <select id="audioDevice"></select>
+                    </div>
+
+                    <div class="preview-wrap idle">
+                        <video id="preview" muted playsinline></video>
+                    </div>
+
+                    <div class="rec-bar">
+                        <span><span class="rec-dot"></span><span id="recState">待機</span></span>
+                        <span id="recTime">00:00</span>
+                    </div>
+
+                    <button id="connectBtn" class="btn-line" type="button">連接相機</button>
+                    <button id="recordBtn" type="button" disabled>開始錄影</button>
+                </div>
+
+                <div id="paneFile" hidden>
+                    <div class="field">
+                        <label for="videoFile">影片檔案</label>
+                        <input type="file" id="videoFile" name="file" accept="video/*" />
+                    </div>
+
+                    <button id="uploadBtn" type="button">上傳</button>
+                </div>
+
                 <p id="status"></p>
             </section>
 
@@ -352,8 +511,6 @@
         </main>
 
         <script>
-            const uploadBtn = document.getElementById("uploadBtn");
-            const videoFile = document.getElementById("videoFile");
             const apiBase = document.getElementById("apiBase");
             const status = document.getElementById("status");
             const result = document.getElementById("result");
@@ -363,6 +520,45 @@
             const qrcodeDiv = document.getElementById("qrcode");
             const qrPlate = document.querySelector(".qr-plate");
             const blurBtn = document.getElementById("blurBtn");
+
+            const tabRecord = document.getElementById("tabRecord");
+            const tabFile = document.getElementById("tabFile");
+            const paneRecord = document.getElementById("paneRecord");
+            const paneFile = document.getElementById("paneFile");
+
+            const videoDevice = document.getElementById("videoDevice");
+            const audioDevice = document.getElementById("audioDevice");
+            const preview = document.getElementById("preview");
+            const previewWrap = document.querySelector(".preview-wrap");
+            const recBar = document.querySelector(".rec-bar");
+            const recState = document.getElementById("recState");
+            const recTime = document.getElementById("recTime");
+            const connectBtn = document.getElementById("connectBtn");
+            const recordBtn = document.getElementById("recordBtn");
+
+            const uploadBtn = document.getElementById("uploadBtn");
+            const videoFile = document.getElementById("videoFile");
+
+            const LS_VIDEO = "pod.videoDeviceId";
+            const LS_AUDIO = "pod.audioDeviceId";
+
+            // MP4 first, always: the QR is meant to be scanned with a phone, and
+            // iOS Safari will not play a VP8/VP9 WebM. WebM is only a fallback so
+            // recording still works on browsers without an MP4 encoder.
+            const MIME_CANDIDATES = [
+                'video/mp4;codecs="avc1.42E01E,mp4a.40.2"',
+                "video/mp4;codecs=h264,aac",
+                "video/mp4",
+                "video/webm;codecs=vp9,opus",
+                "video/webm;codecs=vp8,opus",
+                "video/webm",
+            ];
+
+            let stream = null;
+            let recorder = null;
+            let chunks = [];
+            let timerId = null;
+            let startedAt = 0;
 
             function setStatus(text, kind) {
                 status.textContent = text;
@@ -384,6 +580,336 @@
             // screen-reader users get it through blurBtn
             qrPlate.addEventListener("click", toggleBlur);
 
+            function showTab(record) {
+                tabRecord.setAttribute("aria-selected", String(record));
+                tabFile.setAttribute("aria-selected", String(!record));
+                paneRecord.hidden = !record;
+                paneFile.hidden = record;
+            }
+
+            tabRecord.addEventListener("click", () => showTab(true));
+            tabFile.addEventListener("click", () => showTab(false));
+
+            function pickMime() {
+                if (typeof MediaRecorder === "undefined") return "";
+                return MIME_CANDIDATES.find((t) => MediaRecorder.isTypeSupported(t)) || "";
+            }
+
+            function extFor(type) {
+                return type.includes("mp4") ? "mp4" : "webm";
+            }
+
+            function formatSize(bytes) {
+                const mb = bytes / 1048576;
+                return mb >= 1024 ? (mb / 1024).toFixed(2) + " GB" : mb.toFixed(1) + " MB";
+            }
+
+            function stamp() {
+                const d = new Date();
+                const p = (n) => String(n).padStart(2, "0");
+                return (
+                    d.getFullYear() +
+                    p(d.getMonth() + 1) +
+                    p(d.getDate()) +
+                    "-" +
+                    p(d.getHours()) +
+                    p(d.getMinutes()) +
+                    p(d.getSeconds())
+                );
+            }
+
+            // ---- upload + QR, shared by the recorder and the file picker ----
+
+            async function uploadFile(file) {
+                const base = apiBase.value.replace(/\/$/, "");
+
+                const formData = new FormData();
+                formData.append("file", file);
+
+                setStatus("上傳中… " + formatSize(file.size));
+                result.hidden = true;
+
+                const res = await fetch(base + "/", {
+                    method: "POST",
+                    body: formData,
+                });
+
+                if (!res.ok) {
+                    throw new Error("Upload failed: " + res.status);
+                }
+
+                const data = await res.json();
+
+                messageEl.textContent = data.message;
+                idEl.textContent = data.id;
+
+                const videoUrl = base + "/" + data.id;
+                videoLink.href = videoUrl;
+                videoLink.textContent = videoUrl;
+
+                qrcodeDiv.innerHTML = "";
+                setBlurred(false);
+                new QRCode(qrcodeDiv, {
+                    text: videoUrl,
+                    // sized for scanning from ~0.7 m: phone cameras need
+                    // roughly distance/10 of QR width, so ~7 cm ≈ 265 CSS px
+                    // minimum — 340 leaves headroom on scaled displays.
+                    width: 340,
+                    height: 340,
+                    colorDark: "#000000",
+                    colorLight: "#ffffff",
+                    correctLevel: QRCode.CorrectLevel.H,
+                });
+
+                result.hidden = false;
+                return data;
+            }
+
+            // ---- device list ----
+
+            function fillSelect(sel, list, fallbackName, key) {
+                const want = sel.value || localStorage.getItem(key) || "";
+                sel.innerHTML = "";
+
+                if (!list.length) {
+                    const o = document.createElement("option");
+                    o.value = "";
+                    o.textContent = "找不到裝置";
+                    sel.append(o);
+                    return;
+                }
+
+                list.forEach((d, i) => {
+                    const o = document.createElement("option");
+                    o.value = d.deviceId;
+                    // labels stay blank until the first getUserMedia grant
+                    o.textContent = d.label || fallbackName + " " + (i + 1);
+                    sel.append(o);
+                });
+
+                if (want && list.some((d) => d.deviceId === want)) sel.value = want;
+            }
+
+            async function refreshDevices() {
+                let devices = [];
+                try {
+                    devices = await navigator.mediaDevices.enumerateDevices();
+                } catch {
+                    return;
+                }
+                fillSelect(
+                    videoDevice,
+                    devices.filter((d) => d.kind === "videoinput"),
+                    "視訊裝置",
+                    LS_VIDEO,
+                );
+                fillSelect(
+                    audioDevice,
+                    devices.filter((d) => d.kind === "audioinput"),
+                    "音訊裝置",
+                    LS_AUDIO,
+                );
+            }
+
+            // after connecting, point the selects at what we actually got — the
+            // browser may have ignored our request and handed back a default
+            function syncSelectsToStream() {
+                const v = stream.getVideoTracks()[0];
+                const a = stream.getAudioTracks()[0];
+                if (v && v.getSettings().deviceId) {
+                    videoDevice.value = v.getSettings().deviceId;
+                    localStorage.setItem(LS_VIDEO, videoDevice.value);
+                }
+                if (a && a.getSettings().deviceId) {
+                    audioDevice.value = a.getSettings().deviceId;
+                    localStorage.setItem(LS_AUDIO, audioDevice.value);
+                }
+            }
+
+            // ---- connect / disconnect ----
+
+            function disconnect() {
+                if (stream) {
+                    stream.getTracks().forEach((t) => t.stop());
+                    stream = null;
+                }
+                preview.srcObject = null;
+                previewWrap.classList.add("idle");
+                connectBtn.textContent = "連接相機";
+                recordBtn.disabled = true;
+                recState.textContent = "待機";
+            }
+
+            async function connect() {
+                disconnect();
+
+                const v = videoDevice.value;
+                const a = audioDevice.value;
+
+                setStatus("連接中…");
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        ...(v ? { deviceId: { exact: v } } : {}),
+                        width: { ideal: 1920 },
+                        height: { ideal: 1080 },
+                        frameRate: { ideal: 60 },
+                    },
+                    audio: {
+                        ...(a ? { deviceId: { exact: a } } : {}),
+                        // Chrome's voice processing is tuned for calls and wrecks
+                        // podcast audio — take the raw capture instead
+                        echoCancellation: false,
+                        noiseSuppression: false,
+                        autoGainControl: false,
+                    },
+                });
+
+                preview.srcObject = stream;
+                preview.play().catch(() => {});
+                previewWrap.classList.remove("idle");
+
+                await refreshDevices();
+                syncSelectsToStream();
+
+                connectBtn.textContent = "中斷連接";
+                recordBtn.disabled = false;
+
+                const s = stream.getVideoTracks()[0].getSettings();
+                const mime = pickMime();
+                const fmt = mime ? extFor(mime).toUpperCase() : "無編碼器";
+                setStatus(
+                    "已連接 " +
+                        (s.width || "?") +
+                        "×" +
+                        (s.height || "?") +
+                        " @" +
+                        Math.round(s.frameRate || 0) +
+                        "fps · " +
+                        fmt,
+                );
+            }
+
+            connectBtn.addEventListener("click", async () => {
+                if (stream) {
+                    disconnect();
+                    setStatus("已中斷連接。");
+                    return;
+                }
+                connectBtn.disabled = true;
+                try {
+                    await connect();
+                } catch (err) {
+                    disconnect();
+                    setStatus("無法連接：" + err.message, "error");
+                } finally {
+                    connectBtn.disabled = false;
+                }
+            });
+
+            // swapping source mid-session (Pocket 4 out, phone webcam in) just
+            // re-acquires against the new selection
+            async function onDeviceChanged(sel, key) {
+                localStorage.setItem(key, sel.value);
+                if (!stream) return;
+                try {
+                    await connect();
+                } catch (err) {
+                    disconnect();
+                    setStatus("無法切換來源：" + err.message, "error");
+                }
+            }
+
+            videoDevice.addEventListener("change", () => onDeviceChanged(videoDevice, LS_VIDEO));
+            audioDevice.addEventListener("change", () => onDeviceChanged(audioDevice, LS_AUDIO));
+
+            // ---- recording ----
+
+            function tick() {
+                const s = Math.floor((Date.now() - startedAt) / 1000);
+                const p = (n) => String(n).padStart(2, "0");
+                recTime.textContent = p(Math.floor(s / 60)) + ":" + p(s % 60);
+            }
+
+            function startRecording() {
+                const mimeType = pickMime();
+                if (!mimeType) {
+                    setStatus("此瀏覽器不支援錄影。", "error");
+                    return;
+                }
+
+                chunks = [];
+                recorder = new MediaRecorder(stream, {
+                    mimeType,
+                    videoBitsPerSecond: 6000000,
+                    audioBitsPerSecond: 128000,
+                });
+                recorder.ondataavailable = (e) => {
+                    if (e.data && e.data.size) chunks.push(e.data);
+                };
+                recorder.onerror = (e) => {
+                    setStatus("錄影錯誤：" + ((e.error && e.error.message) || "unknown"), "error");
+                };
+                recorder.onstop = onRecordingStopped;
+                // a timeslice keeps chunks flowing instead of building one giant
+                // buffer, and limits what a mid-take crash can lose
+                recorder.start(1000);
+
+                startedAt = Date.now();
+                recTime.textContent = "00:00";
+                timerId = setInterval(tick, 250);
+
+                recBar.classList.add("live");
+                recState.textContent = "錄影中";
+                recordBtn.textContent = "停止錄影";
+                connectBtn.disabled = true;
+                videoDevice.disabled = true;
+                audioDevice.disabled = true;
+                setStatus("錄影中…");
+            }
+
+            async function onRecordingStopped() {
+                clearInterval(timerId);
+                recBar.classList.remove("live");
+                recState.textContent = "待機";
+                recordBtn.textContent = "開始錄影";
+                recordBtn.disabled = true;
+
+                const type = recorder.mimeType || pickMime() || "video/webm";
+                const ext = extFor(type);
+                const blob = new Blob(chunks, { type });
+                chunks = [];
+
+                try {
+                    if (!blob.size) throw new Error("錄影內容是空的");
+                    await uploadFile(
+                        new File([blob], "recording-" + stamp() + "." + ext, { type }),
+                    );
+                    setStatus(
+                        ext === "mp4" ? "上傳完成。" : "上傳完成（WebM — iPhone 可能無法播放）。",
+                        "done",
+                    );
+                } catch (err) {
+                    setStatus("錯誤：" + err.message, "error");
+                } finally {
+                    recordBtn.disabled = !stream;
+                    connectBtn.disabled = false;
+                    videoDevice.disabled = false;
+                    audioDevice.disabled = false;
+                }
+            }
+
+            recordBtn.addEventListener("click", () => {
+                if (recorder && recorder.state === "recording") {
+                    setStatus("處理中…");
+                    recordBtn.disabled = true;
+                    recorder.stop();
+                } else if (stream) {
+                    startRecording();
+                }
+            });
+
+            // ---- file picker (unchanged behaviour, now sharing uploadFile) ----
+
             uploadBtn.addEventListener("click", async () => {
                 const file = videoFile.files[0];
                 if (!file) {
@@ -391,56 +917,32 @@
                     return;
                 }
 
-                const base = apiBase.value.replace(/\/$/, "");
-
-                const formData = new FormData();
-                formData.append("file", file);
-
-                setStatus("上傳中…");
                 uploadBtn.disabled = true;
-                result.hidden = true;
-
                 try {
-                    const res = await fetch(base + "/", {
-                        method: "POST",
-                        body: formData,
-                    });
-
-                    if (!res.ok) {
-                        throw new Error("Upload failed: " + res.status);
-                    }
-
-                    const data = await res.json();
-
+                    await uploadFile(file);
                     setStatus("上傳完成。", "done");
-                    messageEl.textContent = data.message;
-                    idEl.textContent = data.id;
-
-                    const videoUrl = base + "/" + data.id;
-                    videoLink.href = videoUrl;
-                    videoLink.textContent = videoUrl;
-
-                    qrcodeDiv.innerHTML = "";
-                    setBlurred(false);
-                    new QRCode(qrcodeDiv, {
-                        text: videoUrl,
-                        // sized for scanning from ~0.7 m: phone cameras need
-                        // roughly distance/10 of QR width, so ~7 cm ≈ 265 CSS px
-                        // minimum — 340 leaves headroom on scaled displays.
-                        width: 340,
-                        height: 340,
-                        colorDark: "#000000",
-                        colorLight: "#ffffff",
-                        correctLevel: QRCode.CorrectLevel.H,
-                    });
-
-                    result.hidden = false;
                 } catch (err) {
                     setStatus("錯誤：" + err.message, "error");
                 } finally {
                     uploadBtn.disabled = false;
                 }
             });
+
+            // ---- init ----
+
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                // getUserMedia needs a secure context: file:// will not do
+                connectBtn.disabled = true;
+                showTab(false);
+                setStatus("無法存取相機：請用 http://localhost 或 HTTPS 開啟本頁。", "error");
+            } else {
+                navigator.mediaDevices.addEventListener("devicechange", refreshDevices);
+                refreshDevices().then(() => {
+                    if (!videoDevice.options[0] || !videoDevice.options[0].textContent.trim())
+                        return;
+                    if (!videoDevice.value) setStatus("按「連接相機」以授權並列出裝置。");
+                });
+            }
         </script>
     </body>
 </html>
