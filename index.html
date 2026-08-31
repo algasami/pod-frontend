@@ -564,8 +564,8 @@
                 </div>
 
                 <div class="field">
-                    <label for="identityFile">上傳金鑰</label>
-                    <input type="file" id="identityFile" accept=".json,application/json" />
+                    <label for="identityFile">上傳金鑰（ssh-keygen 產生的私鑰檔）</label>
+                    <input type="file" id="identityFile" />
                     <p id="identityState" class="keyinfo"></p>
                     <div class="key-row">
                         <button id="identityTest" class="btn-line" type="button">測試連線</button>
@@ -921,19 +921,175 @@
 
                 if (!next) {
                     identityClear.disabled = true;
-                    showIdentity("未載入金鑰，無法上傳。", "error");
+                    showIdentity("未載入金鑰，無法上傳。請選擇私鑰檔（例如 pod-key）。", "error");
                     return;
                 }
                 identityClear.disabled = false;
                 showIdentity((next.comment ? next.comment + " · " : "") + next.fingerprint);
             }
 
-            function parseIdentity(text) {
-                const parsed = JSON.parse(text);
+            const SSH_KEY_TYPE = "ssh-ed25519";
+
+            // The public half is what the *server* holds: it can check a
+            // signature but not make one, so a .pub can never drive this page.
+            // It is the easier file to reach for, though, so it gets its own
+            // message rather than a generic parse failure.
+            const PUBLIC_KEY_HINT =
+                "這是公鑰（.pub），只能貼到伺服器的 authorized_keys。請改選同名、沒有 .pub 的私鑰檔。";
+
+            function base64ToBytes(text) {
+                const binary = atob(text.replace(/\s+/g, ""));
+                const out = new Uint8Array(binary.length);
+                for (let i = 0; i < binary.length; i += 1) out[i] = binary.charCodeAt(i);
+                return out;
+            }
+
+            function bytesToBase64Url(bytes) {
+                return base64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+            }
+
+            // OpenSSH writes everything as a 32-bit big-endian length followed
+            // by that many bytes; the key file is nested runs of exactly that.
+            function wireReader(bytes) {
+                const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+                let offset = 0;
+
+                const take = (length) => {
+                    if (offset + length > bytes.length) throw new Error("私鑰檔已截斷");
+                    const value = bytes.subarray(offset, offset + length);
+                    offset += length;
+                    return value;
+                };
+                const uint32 = () => {
+                    if (offset + 4 > bytes.length) throw new Error("私鑰檔已截斷");
+                    const value = view.getUint32(offset);
+                    offset += 4;
+                    return value;
+                };
+                const string = () => take(uint32());
+                return { take, uint32, string, text: () => new TextDecoder().decode(string()) };
+            }
+
+            function wireString(bytes) {
+                const out = new Uint8Array(4 + bytes.length);
+                new DataView(out.buffer).setUint32(0, bytes.length);
+                out.set(bytes, 4);
+                return out;
+            }
+
+            // Hashing the blob an OpenSSH public key base64-encodes is what
+            // produces the fingerprint `ssh-keygen -lf` prints, so the value on
+            // screen can be checked against the key file by eye.
+            async function sshFingerprint(rawPublicKey) {
+                const type = new TextEncoder().encode(SSH_KEY_TYPE);
+                const blob = new Uint8Array([...wireString(type), ...wireString(rawPublicKey)]);
+                const digest = await crypto.subtle.digest("SHA-256", blob);
+                return "SHA256:" + base64(digest).replace(/=+$/, "");
+            }
+
+            const OPENSSH_MAGIC = "openssh-key-v1\u0000";
+
+            /**
+             * Unpacks an unencrypted OpenSSH Ed25519 private key.
+             *
+             * After a magic string the container holds the cipher and KDF names,
+             * the public key, and then a private section carrying two matching
+             * check words, the 64-byte secret — a 32-byte seed followed by the
+             * 32-byte public key — and the comment ssh-keygen was given.
+             */
+            async function identityFromOpenSshKey(text) {
+                const body = text.match(
+                    /-----BEGIN OPENSSH PRIVATE KEY-----([\s\S]+?)-----END OPENSSH PRIVATE KEY-----/,
+                );
+                if (!body) throw new Error("不是 OpenSSH 私鑰檔");
+
+                const reader = wireReader(base64ToBytes(body[1]));
+                if (new TextDecoder().decode(reader.take(OPENSSH_MAGIC.length)) !== OPENSSH_MAGIC) {
+                    throw new Error("不是 OpenSSH 私鑰檔");
+                }
+
+                const cipher = reader.text();
+                reader.text(); // kdf name
+                reader.string(); // kdf options
+                if (cipher !== "none") {
+                    // Decrypting would mean implementing bcrypt_pbkdf in the
+                    // page; pointing at ssh-keygen is the honest answer.
+                    throw new Error(
+                        '私鑰有密碼保護。請先用 ssh-keygen -p -N "" -f <私鑰> 移除密碼，或改用沒有密碼的金鑰。',
+                    );
+                }
+
+                if (reader.uint32() !== 1) throw new Error("私鑰檔含有多把金鑰");
+                reader.string(); // public key blob, repeated inside the private section
+
+                const secret = wireReader(reader.string());
+                if (secret.uint32() !== secret.uint32()) {
+                    // Unequal check words mean the section is still encrypted.
+                    throw new Error("私鑰有密碼保護，請先移除密碼。");
+                }
+
+                const keyType = secret.text();
+                if (keyType !== SSH_KEY_TYPE) {
+                    throw new Error(
+                        `不支援的金鑰種類：${keyType}。請用 ssh-keygen -t ed25519 產生。`,
+                    );
+                }
+
+                secret.string(); // public key, recovered from the secret below
+                const keyPair = secret.string();
+                if (keyPair.length !== 64) throw new Error("私鑰長度不正確");
+                const comment = secret.text();
+
+                const seed = keyPair.subarray(0, 32);
+                const publicKey = keyPair.subarray(32);
+
+                return {
+                    fingerprint: await sshFingerprint(publicKey),
+                    comment,
+                    privateJwk: {
+                        kty: "OKP",
+                        crv: "Ed25519",
+                        d: bytesToBase64Url(seed),
+                        x: bytesToBase64Url(publicKey),
+                    },
+                };
+            }
+
+            /**
+             * Accepts either an OpenSSH private key or the JSON this page saved
+             * earlier, and rejects a public key with an explanation.
+             */
+            async function parseIdentity(text) {
+                const trimmed = text.trim();
+
+                if (trimmed.includes("BEGIN OPENSSH PRIVATE KEY")) {
+                    return identityFromOpenSshKey(trimmed);
+                }
+                if (/^ssh-[a-z0-9-]+\s/i.test(trimmed)) {
+                    throw new Error(PUBLIC_KEY_HINT);
+                }
+                if (trimmed.includes("BEGIN") && trimmed.includes("PRIVATE KEY")) {
+                    throw new Error(
+                        "這是 PEM 私鑰。請用 ssh-keygen -t ed25519 產生 OpenSSH 格式的金鑰。",
+                    );
+                }
+
+                let parsed;
+                try {
+                    parsed = JSON.parse(trimmed);
+                } catch {
+                    throw new Error("認不得這個檔案。請選擇 ssh-keygen 產生的私鑰檔。");
+                }
+
                 const jwk = parsed && parsed.privateJwk;
                 if (!parsed.fingerprint || !jwk || jwk.kty !== "OKP" || jwk.crv !== "Ed25519") {
-                    throw new Error("不是有效的 pod-identity.json");
+                    throw new Error("不是有效的金鑰備份檔");
                 }
+                // "d" is the private scalar. Without it this is the public key
+                // wearing the same shape, and importKey would reject it later
+                // with nothing useful to say.
+                if (!jwk.d) throw new Error(PUBLIC_KEY_HINT);
+
                 return {
                     fingerprint: parsed.fingerprint,
                     comment: parsed.comment || "",
@@ -1542,7 +1698,7 @@
                 const file = identityFile.files[0];
                 if (!file) return;
                 try {
-                    const next = parseIdentity(await file.text());
+                    const next = await parseIdentity(await file.text());
                     // Kept locally so the key survives a reload; it is only ever
                     // sent to the browser's own crypto, never to the server.
                     localStorage.setItem(LS_IDENTITY, JSON.stringify(next));
@@ -1573,11 +1729,11 @@
                 }
             });
 
-            (function restoreIdentity() {
+            (async function restoreIdentity() {
                 const stored = localStorage.getItem(LS_IDENTITY);
                 if (!stored) return setIdentity(null);
                 try {
-                    setIdentity(parseIdentity(stored));
+                    setIdentity(await parseIdentity(stored));
                 } catch {
                     // A stored blob that no longer parses is worse than none.
                     localStorage.removeItem(LS_IDENTITY);
