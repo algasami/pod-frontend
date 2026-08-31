@@ -331,12 +331,13 @@
                 background: var(--bg);
             }
 
-            /* the 16:9 box holds its shape before a stream arrives, so the card
-               doesn't jump the moment the camera connects */
+            /* the fallback shape holds before a stream arrives, so the card
+               doesn't jump the moment the camera connects; connect() then swaps
+               in whatever the camera actually delivers */
             .preview-wrap {
                 position: relative;
                 margin-top: 12px;
-                aspect-ratio: 16 / 9;
+                aspect-ratio: var(--preview-ar, 16 / 9);
                 background: var(--fg);
                 border: 1px solid var(--line);
             }
@@ -451,11 +452,12 @@
             }
 
             /* mirrors the server-side overlay geometry exactly: 10% of frame
-               width, 1.67% margin — see WATERMARK_WIDTH/MARGIN in the backend */
+               width, 1.67% margin, top-right — see WATERMARK_WIDTH_RATIO and
+               WATERMARK_MARGIN_RATIO in the backend config */
             .wm-preview {
                 position: absolute;
                 right: 1.67%;
-                bottom: 1.67%;
+                top: 1.67%;
                 width: 10%;
                 pointer-events: none;
             }
@@ -564,10 +566,6 @@
 
                 <div class="toggles">
                     <label class="check">
-                        <input type="checkbox" id="optIntro" />
-                        <span>加入片頭</span>
-                    </label>
-                    <label class="check">
                         <input type="checkbox" id="optWatermark" />
                         <span>浮水印</span>
                     </label>
@@ -622,13 +620,11 @@
 
             const uploadBtn = document.getElementById("uploadBtn");
             const videoFile = document.getElementById("videoFile");
-            const optIntro = document.getElementById("optIntro");
             const optWatermark = document.getElementById("optWatermark");
             const wmPreview = document.getElementById("wmPreview");
 
             const LS_VIDEO = "pod.videoDeviceId";
             const LS_AUDIO = "pod.audioDeviceId";
-            const LS_INTRO = "pod.optIntro";
             const LS_WATERMARK = "pod.optWatermark";
 
             // YouTube's recommended SDR upload bitrates for 1080p at standard
@@ -756,17 +752,15 @@
 
             async function uploadFile(file) {
                 const base = apiBase.value.replace(/\/$/, "");
-                const wantIntro = optIntro.checked;
                 const wantWatermark = optWatermark.checked;
 
                 const formData = new FormData();
-                // flags first so multer has them parsed before the file body
-                formData.append("intro", wantIntro ? "1" : "0");
+                // flag first so multer has it parsed before the file body
                 formData.append("watermark", wantWatermark ? "1" : "0");
                 formData.append("file", file);
 
                 setStatus(
-                    wantIntro || wantWatermark
+                    wantWatermark
                         ? "上傳中… " + formatSize(file.size) + "（伺服器合成需要一點時間）"
                         : "上傳中… " + formatSize(file.size),
                 );
@@ -883,6 +877,7 @@
                 }
                 preview.srcObject = null;
                 previewWrap.classList.add("idle");
+                previewWrap.style.removeProperty("--preview-ar");
                 connectBtn.textContent = "連接相機";
                 recordBtn.disabled = true;
                 recState.textContent = "待機";
@@ -898,9 +893,12 @@
                 stream = await navigator.mediaDevices.getUserMedia({
                     video: {
                         ...(v ? { deviceId: { exact: v } } : {}),
-                        width: { ideal: 1920, max: 1920 },
-                        height: { ideal: 1080, max: 1080 },
-                        frameRate: { ideal: 30, max: 30 },
+                        // ideals, not caps: a portrait camera is free to hand
+                        // back 1080x1920, and the pipeline keeps whatever shape
+                        // it delivers
+                        width: { ideal: 1920 },
+                        height: { ideal: 1080 },
+                        frameRate: { ideal: 30 },
                     },
                     audio: {
                         ...(a ? { deviceId: { exact: a } } : {}),
@@ -923,6 +921,9 @@
                 recordBtn.disabled = false;
 
                 const s = stream.getVideoTracks()[0].getSettings();
+                if (s.width && s.height) {
+                    previewWrap.style.setProperty("--preview-ar", s.width + " / " + s.height);
+                }
                 const mime = pickMime();
                 const fmt = mime ? extFor(mime).toUpperCase() : "無編碼器";
                 setStatus(
@@ -1159,7 +1160,6 @@
                 });
             }
 
-            bindToggle(optIntro, LS_INTRO, null);
             bindToggle(optWatermark, LS_WATERMARK, syncWatermarkPreview);
             syncWatermarkPreview();
 
