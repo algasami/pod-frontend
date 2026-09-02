@@ -621,6 +621,15 @@
                         <input type="text" id="apiBase" value="localhost:3380" spellcheck="false" />
                     </div>
                     <div>
+                        <label for="apiDisplay">API 顯示網址</label>
+                        <input
+                            type="text"
+                            id="apiDisplay"
+                            value="localhost:3380"
+                            spellcheck="false"
+                        />
+                    </div>
+                    <div>
                         <label for="identityFile" title="ssh-keygen 產生的私鑰檔">
                             上傳金鑰（私鑰檔）
                         </label>
@@ -727,6 +736,7 @@
 
         <script>
             const apiBase = document.getElementById("apiBase");
+            const apiDisplay = document.getElementById("apiDisplay");
             const status = document.getElementById("status");
             const result = document.getElementById("result");
             const messageEl = document.getElementById("message");
@@ -1237,6 +1247,7 @@
 
             async function uploadFile(file) {
                 const base = apiBase.value.replace(/\/$/, "");
+                const display = apiDisplay.value.replace(/\/$/, "");
                 const wantWatermark = optWatermark.checked;
                 const wantVertical = optVertical.checked;
 
@@ -1285,7 +1296,7 @@
                 messageEl.textContent = data.message;
                 idEl.textContent = data.id;
 
-                const videoUrl = base + "/" + data.id;
+                const videoUrl = display + "/" + data.id;
                 videoLink.href = videoUrl;
                 videoLink.textContent = videoUrl;
 
