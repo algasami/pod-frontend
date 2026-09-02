@@ -630,7 +630,7 @@
                         <input
                             type="text"
                             id="apiDisplay"
-                            value="https://pod-test.algasami.com"
+                            value="https://pod-backend.algasami.com"
                             spellcheck="false"
                         />
                     </div>
@@ -1767,9 +1767,7 @@
                     // the take from being reported as uploaded.
                     if (blob.size < MIN_USABLE_BYTES) {
                         throw new Error(
-                            "錄影內容不完整（只寫出 " +
-                                blob.size +
-                                " 位元組，瀏覽器沒有輸出影像）",
+                            "錄影內容不完整（只寫出 " + blob.size + " 位元組，瀏覽器沒有輸出影像）",
                         );
                     }
                     await uploadFile(
