@@ -799,6 +799,21 @@
             const MAX_SECONDS = 60;
             const CAPTURE_FPS = 30;
 
+            // Chrome's MP4 muxer ignores the timeslice passed to start(): it
+            // holds the whole take and emits it in a single dataavailable once
+            // stop() has finished writing. Until that lands, `chunks` holds
+            // nothing but container headers — a few dozen bytes that still make
+            // a truthy Blob. Finalizing on a timer alone therefore ships a file
+            // with no frames in it, which the server rejects with a 422, so the
+            // stop path waits for real bytes instead of for a deadline.
+            const STOP_POLL_MS = 2000;
+            const STOP_MAX_WAIT_MS = 60000;
+            // A take worth salvaging is far bigger than this: even a half-second
+            // at the lowest bitrate clears it by an order of magnitude, while a
+            // headers-only flush and a single stranded frame both fall short.
+            const MIN_SALVAGE_BYTES = 65536;
+            const MIN_USABLE_BYTES = 16384;
+
             function videoBitsFor(settings) {
                 const pixels = (settings.width || 1920) * (settings.height || 1080);
                 const scaled = (BASE_VIDEO_BITS * pixels) / BASE_PIXELS;
@@ -1643,8 +1658,11 @@
                     console.log("[pod] onstop fired");
                     onRecordingStopped();
                 };
-                // a timeslice keeps chunks flowing instead of building one giant
-                // buffer, and limits what a mid-take crash can lose
+                // A timeslice keeps chunks flowing on the WebM path, which
+                // limits what a mid-take crash can lose. Chrome's MP4 muxer
+                // honours no such thing — it delivers the take in one piece
+                // after stop() — so nothing downstream may assume that chunks
+                // accumulate while recording. See waitForFlush.
                 recorder.start(1000);
                 diag("start");
 
@@ -1682,17 +1700,42 @@
                     console.warn("[pod] requestData failed", err);
                 }
 
-                stopWatchdog = setTimeout(() => {
-                    const info = diag("stop:watchdog");
-                    console.warn("[pod] onstop did not fire within 8s", info);
+                stopWatchdog = setTimeout(() => waitForFlush(0), STOP_POLL_MS);
+
+                recorder.stop();
+            }
+
+            // Salvage is only worth doing once the muxer has actually handed
+            // over the take. Firing on a fixed deadline instead uploads the
+            // container header on its own, which reaches the server as a video
+            // with no decodable frames; waiting costs a few seconds, shipping
+            // that costs the whole recording.
+            function waitForFlush(waited) {
+                const info = diag("stop:watchdog");
+
+                if (info.bytes >= MIN_SALVAGE_BYTES) {
+                    console.warn("[pod] onstop did not fire; salvaging", info);
                     setStatus(
                         "停止逾時 — 正在搶救 " + info.chunks + " 段（見 console）。",
                         "error",
                     );
-                    onRecordingStopped();
-                }, 8000);
+                    return onRecordingStopped();
+                }
 
-                recorder.stop();
+                if (waited < STOP_MAX_WAIT_MS) {
+                    setStatus("停止逾時 — 仍在寫出影片，請稍候…");
+                    stopWatchdog = setTimeout(
+                        () => waitForFlush(waited + STOP_POLL_MS),
+                        STOP_POLL_MS,
+                    );
+                    return;
+                }
+
+                // Nothing usable ever arrived. onRecordingStopped rejects the
+                // blob on size anyway; going through it keeps the teardown and
+                // the finalizing guard in one place.
+                console.error("[pod] stop produced no usable data", info);
+                onRecordingStopped();
             }
 
             async function onRecordingStopped() {
@@ -1718,6 +1761,17 @@
 
                 try {
                     if (!blob.size) throw new Error("錄影內容是空的");
+                    // A container header with no frames behind it is still a
+                    // non-empty Blob, and the server can only answer it with a
+                    // 422. Failing here says what actually went wrong and keeps
+                    // the take from being reported as uploaded.
+                    if (blob.size < MIN_USABLE_BYTES) {
+                        throw new Error(
+                            "錄影內容不完整（只寫出 " +
+                                blob.size +
+                                " 位元組，瀏覽器沒有輸出影像）",
+                        );
+                    }
                     await uploadFile(
                         new File([blob], "recording-" + stamp() + "." + ext, { type }),
                     );
